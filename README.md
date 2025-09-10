@@ -75,4 +75,19 @@ Expected output:
 
 ---
 
-Next step will be to **aggregate RTTs per minute** and prepare for MQTT publishing.
+## Step 2 — Per-Minute Aggregation
+Run:
+```bash
+python agent_a.py
+```
+
+After each minute (+2s grace), Agent A prints an aggregate JSON:
+
+```json
+{"time":"2025-09-10T12:55:00Z","latency_min_ms":0.106,"latency_max_ms":0.909,"latency_avg_ms":0.286,"jitter_min_ms":0.001,"jitter_max_ms":0.755,"jitter_avg_ms":0.136,"sent":92,"received":92,"lost":0}
+```
+
+##  Screenshots
+### Agent A (Client)
+![Agent A running](screenshots/agent-a-step2.png)
+
