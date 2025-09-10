@@ -1,10 +1,14 @@
 
-# Active code (Step 3): Echo server + MQTT subscriber
+#!/usr/bin/env python3
+# Active code (Step 3+4): Echo server + MQTT subscriber → SQLite
 
 import socket
 import threading
 import json
-import paho.mqtt.client as mqtt
+import sqlite3
+from contextlib import closing
+from pathlib import Path
+from paho.mqtt import client as mqtt
 
 # --- TCP echo server config ---
 TCP_HOST = "0.0.0.0"
@@ -15,11 +19,56 @@ MQTT_HOST = "127.0.0.1"
 MQTT_PORT = 1883
 MQTT_TOPIC = "netstats/+/minute"   # receive all agents' minute stats
 
+# --- SQLite config ---
+DB_PATH = Path("netstats.db")
+
+SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS minute_stats (
+  agent_id        TEXT    NOT NULL,
+  minute_utc      TEXT    NOT NULL, -- ISO8601 Z, e.g., 2025-09-09T12:34:00Z
+  latency_min_ms  REAL    NOT NULL,
+  latency_max_ms  REAL    NOT NULL,
+  latency_avg_ms  REAL    NOT NULL,
+  jitter_min_ms   REAL    NOT NULL,
+  jitter_max_ms   REAL    NOT NULL,
+  jitter_avg_ms   REAL    NOT NULL,
+  sent            INTEGER NOT NULL,
+  received        INTEGER NOT NULL,
+  lost            INTEGER NOT NULL,
+  PRIMARY KEY (agent_id, minute_utc)
+);
+CREATE INDEX IF NOT EXISTS idx_minute_stats_time ON minute_stats(minute_utc);
+"""
+
+UPSERT_SQL = """
+INSERT INTO minute_stats (
+  agent_id, minute_utc, latency_min_ms, latency_max_ms, latency_avg_ms,
+  jitter_min_ms, jitter_max_ms, jitter_avg_ms, sent, received, lost
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(agent_id, minute_utc) DO UPDATE SET
+  latency_min_ms=excluded.latency_min_ms,
+  latency_max_ms=excluded.latency_max_ms,
+  latency_avg_ms=excluded.latency_avg_ms,
+  jitter_min_ms=excluded.jitter_min_ms,
+  jitter_max_ms=excluded.jitter_max_ms,
+  jitter_avg_ms=excluded.jitter_avg_ms,
+  sent=excluded.sent,
+  received=excluded.received,
+  lost=excluded.lost;
+"""
+
+def init_db():
+    with closing(sqlite3.connect(str(DB_PATH))) as conn:
+        conn.executescript(SCHEMA_SQL)
+        conn.commit()
+
+# ---------- TCP echo server ----------
 
 def handle_conn(conn, addr):
     """Handle one TCP connection; echo each line back verbatim."""
     try:
-        # Read line-by-line so Agent A gets back exactly what it sent
+        # Flush small frames immediately (avoid Nagle delays)
+        conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         buf = b""
         while True:
             chunk = conn.recv(4096)
@@ -29,11 +78,9 @@ def handle_conn(conn, addr):
             # Echo per line (newline-delimited JSON)
             while b"\n" in buf:
                 line, buf = buf.split(b"\n", 1)
-                # Echo it back with newline (exactly what we got)
                 conn.sendall(line + b"\n")
     finally:
         conn.close()
-
 
 def echo_server():
     """Blocking TCP echo server that accepts multiple clients (each in its own thread)."""
@@ -51,42 +98,62 @@ def echo_server():
     finally:
         server.close()
 
-
-# ---------- MQTT subscriber ----------
+# ---------- MQTT subscriber → SQLite ----------
 
 def on_connect(client, userdata, flags, reason_code, properties=None):
-    print(f"[MQTT] Connected rc={reason_code}; subscribing to '{MQTT_TOPIC}'")
-    client.subscribe(MQTT_TOPIC, qos=0)
+    rc_val = getattr(reason_code, "value", reason_code)
+    sess = getattr(flags, "session_present", None)
+    print(f"[MQTT] on_connect rc={rc_val}, session_present={sess}; subscribing '{MQTT_TOPIC}'")
+    if rc_val == 0:
+        client.subscribe(MQTT_TOPIC, qos=0)
+    else:
+        print(f"[MQTT] connect failed with rc={rc_val}")
+
+def on_subscribe(client, userdata, mid, reason_codes, properties=None):
+    print(f"[MQTT] subscribed mid={mid}, reason_codes={reason_codes}")
 
 def on_message(client, userdata, msg):
     try:
         payload = json.loads(msg.payload.decode("utf-8"))
-        # Pretty print one line (keep it compact)
-        print(f"[MQTT] {msg.topic} -> {json.dumps(payload)}")
+        # Build row and UPSERT
+        row = (
+            payload["agent_id"],
+            payload["time"],
+            float(payload["latency_min_ms"]),
+            float(payload["latency_max_ms"]),
+            float(payload["latency_avg_ms"]),
+            float(payload["jitter_min_ms"]),
+            float(payload["jitter_max_ms"]),
+            float(payload["jitter_avg_ms"]),
+            int(payload["sent"]),
+            int(payload["received"]),
+            int(payload["lost"]),
+        )
+        with closing(sqlite3.connect(str(DB_PATH))) as conn:
+            conn.execute(UPSERT_SQL, row)
+            conn.commit()
+        print(f"[DB] upserted {payload['agent_id']} @ {payload['time']}")
     except Exception as e:
-        print(f"[MQTT] Bad message: {e} raw={msg.payload!r}")
-
+        print(f"[MQTT] Bad message/DB error: {e} raw={msg.payload!r}")
 
 def mqtt_subscriber_loop():
     client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
     client.on_connect = on_connect
     client.on_message = on_message
+    client.on_subscribe = on_subscribe
     client.connect(MQTT_HOST, MQTT_PORT, keepalive=30)
-    # Blocking loop; Ctrl+C to exit
     client.loop_forever()
 
-
 def main():
+    init_db()
     # Start TCP echo server in a background thread
     t = threading.Thread(target=echo_server, daemon=True)
     t.start()
-
     # Run MQTT subscriber in the main thread
     try:
         mqtt_subscriber_loop()
     except KeyboardInterrupt:
         print("\n[Agent B] Stopping...")
-
 
 if __name__ == "__main__":
     main()
