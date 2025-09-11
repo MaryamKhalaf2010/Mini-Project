@@ -1,6 +1,6 @@
 
 #!/usr/bin/env python3
-# Active code (Step 3+4): Echo server + MQTT subscriber → SQLite
+#  Echo server + MQTT subscriber → SQLite
 
 import socket
 import threading
@@ -10,16 +10,16 @@ from contextlib import closing
 from pathlib import Path
 from paho.mqtt import client as mqtt
 
-# --- TCP echo server config ---
+# TCP echo server config
 TCP_HOST = "0.0.0.0"
 TCP_PORT = 4401
 
-# --- MQTT config ---
+# MQTT config
 MQTT_HOST = "127.0.0.1"
 MQTT_PORT = 1883
 MQTT_TOPIC = "netstats/+/minute"   # receive all agents' minute stats
 
-# --- SQLite config ---
+# SQLite config
 DB_PATH = Path("netstats.db")
 
 SCHEMA_SQL = """
@@ -56,13 +56,13 @@ ON CONFLICT(agent_id, minute_utc) DO UPDATE SET
   received=excluded.received,
   lost=excluded.lost;
 """
-
+# initialize DB if not exists
 def init_db():
     with closing(sqlite3.connect(str(DB_PATH))) as conn:
         conn.executescript(SCHEMA_SQL)
         conn.commit()
 
-# ---------- TCP echo server ----------
+# TCP echo server handlers
 
 def handle_conn(conn, addr):
     """Handle one TCP connection; echo each line back verbatim."""
@@ -81,7 +81,8 @@ def handle_conn(conn, addr):
                 conn.sendall(line + b"\n")
     finally:
         conn.close()
-
+        
+# Start TCP echo server
 def echo_server():
     """Blocking TCP echo server that accepts multiple clients (each in its own thread)."""
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -98,7 +99,7 @@ def echo_server():
     finally:
         server.close()
 
-# ---------- MQTT subscriber → SQLite ----------
+#  MQTT subscriber → SQLite DB
 
 def on_connect(client, userdata, flags, reason_code, properties=None):
     rc_val = getattr(reason_code, "value", reason_code)
@@ -108,10 +109,12 @@ def on_connect(client, userdata, flags, reason_code, properties=None):
         client.subscribe(MQTT_TOPIC, qos=0)
     else:
         print(f"[MQTT] connect failed with rc={rc_val}")
-
+        
+# confirm subscription
 def on_subscribe(client, userdata, mid, reason_codes, properties=None):
     print(f"[MQTT] subscribed mid={mid}, reason_codes={reason_codes}")
-
+    
+# process incoming messages , insert into SQLite DB
 def on_message(client, userdata, msg):
     try:
         payload = json.loads(msg.payload.decode("utf-8"))
@@ -135,7 +138,8 @@ def on_message(client, userdata, msg):
         print(f"[DB] upserted {payload['agent_id']} @ {payload['time']}")
     except Exception as e:
         print(f"[MQTT] Bad message/DB error: {e} raw={msg.payload!r}")
-
+        
+# MQTT subscriber loop to run in main thread
 def mqtt_subscriber_loop():
     client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
     client.on_connect = on_connect
@@ -145,6 +149,7 @@ def mqtt_subscriber_loop():
     client.loop_forever()
 
 def main():
+    # initialize DB 
     init_db()
     # Start TCP echo server in a background thread
     t = threading.Thread(target=echo_server, daemon=True)
@@ -158,26 +163,3 @@ def main():
 if __name__ == "__main__":
     main()
 
-# Step 1 (Simple TCP Echo Server)
-
-
-"""
-import socket
-
-HOST = "0.0.0.0"   # Listen on all network interfaces
-PORT = 4401
-
-server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server.bind((HOST, PORT))
-server.listen(1)
-print(f"[Agent B] Echo server listening on {HOST}:{PORT}")
-
-conn, addr = server.accept()
-print(f"[Agent B] Connected by {addr}")
-
-while True:
-    data = conn.recv(1024)
-    if not data:
-        break
-    conn.sendall(data)   # Echo back exactly what was received
-"""
