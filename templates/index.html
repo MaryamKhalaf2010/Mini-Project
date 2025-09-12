@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Network Stats Viewer</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    /* Basic layout & theming */
+    body {
+      margin: 0;
+      font-family: system-ui, Arial, sans-serif;
+      background: #fbfcfcff;
+      color: #111;
+    }
+    header {
+      padding: 12px 20px;
+      background: #2563eb;        /* top bar color */
+      color: #cfe5fcff;            /* top bar text color */
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    header h1 { margin: 0; font-size: 18px; }
+    #controls { display: flex; gap: 12px; align-items: center; }
+    main { padding: 16px; }
+    canvas { width: 100% !important; height: 500px !important; } /* make chart fill width & fixed height */
+    label { font-size: 13px; }
+    input { padding: 4px 6px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Network Minute Stats</h1>
+    <div id="controls">
+      <!-- Simple visibility toggles for the three series -->
+      <label><input type="checkbox" id="showLatency" checked /> Latency Avg</label>
+      <label><input type="checkbox" id="showJitter" checked /> Jitter Avg</label>
+      <label><input type="checkbox" id="showLost" checked /> Lost</label>
+      <!-- Manual refresh button -->
+      <button id="refreshBtn">Refresh</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Single Chart.js canvas -->
+    <canvas id="chart"></canvas>
+  </main>
+
+  <!-- Chart.js via CDN (no bundler needed) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+    /* -----------------------------
+       GLOBALS & SMALL UTILITIES
+       ----------------------------- */
+    let chart;  // holds the Chart.js instance so we can update it in-place
+
+    // Fixed colors for each series (latency, jitter, lost)
+    const CHART_COLORS = {
+      latency: '#3b82f6',                   // blue line
+      jitter:  '#a855f7',                   // purple line
+      lost:    'rgba(239, 68, 68, 0.55)'    // semi-transparent red bars
+    };
+
+    // Shorthand to get element by id
+    const $ = id => document.getElementById(id);
+
+    /* -----------------------------
+       STATE & URL BUILDERS
+       ----------------------------- */
+
+    // Collect current UI state (checkboxes + any future inputs)
+    function getState(){
+      return {
+        agent: "",       // leave blank → backend decides or aggregates; add a select if needed
+        minutes: 120,    // number of minutes to fetch/display (fixed window)
+        showLatency: $('showLatency').checked,
+        showJitter:  $('showJitter').checked,
+        showLost:    $('showLost').checked
+      };
+    }
+
+    // Build the API URL to fetch series data
+    // Expects a backend endpoint `/api/series?agent_id=...&minutes=...`
+    function buildUrl(state){
+      const params = new URLSearchParams();
+      if (state.agent) params.set('agent_id', state.agent); // optional filter
+      params.set('minutes', String(state.minutes));          // window size
+      return `/api/series?${params.toString()}`;
+    }
+
+    /* -----------------------------
+       CHART CONFIG BUILDERS
+       ----------------------------- */
+
+    // Construct the Chart.js datasets based on UI state and fetched arrays
+    function buildDatasets(labels, lat, jit, lost, state){
+      return [
+        {
+          label: 'Latency Avg (ms)',
+          data: lat,
+          borderColor: CHART_COLORS.latency,
+          borderWidth: 2,
+          stepped: true,         // minute buckets → stepped looks nice
+          fill: false,
+          pointRadius: 0,        // hide points for cleaner lines
+          hidden: !state.showLatency,
+          yAxisID: 'y',          // left axis (milliseconds)
+          order: 1               // render above bars
+        },
+        {
+          label: 'Jitter Avg (ms)',
+          data: jit,
+          borderColor: CHART_COLORS.jitter,
+          borderWidth: 2,
+          stepped: true,
+          fill: false,
+          pointRadius: 0,
+          hidden: !state.showJitter,
+          yAxisID: 'y',
+          order: 1
+        },
+        {
+          type: 'bar',           // lost as bars to distinguish from lines
+          label: 'Lost (count)',
+          data: lost,
+          backgroundColor: CHART_COLORS.lost,
+          borderRadius: 6,       // rounded bar corners
+          hidden: !state.showLost,
+          yAxisID: 'y1',         // right axis (counts)
+          order: 3
+        }
+      ];
+    }
+
+    // Y-left for ms, Y-right for counts
+    function buildScales(){
+      return {
+        x: { ticks: { autoSkip: true, maxRotation: 0 } }, // keep x labels readable
+        y: {
+          title: { display: true, text: 'Milliseconds (ms)' },
+          beginAtZero: true,
+          suggestedMax: 2   // tweak based on your typical ms range; Chart.js will auto-scale if higher
+        },
+        y1: {
+          title: { display: true, text: 'Lost (count)' },
+          position: 'right',
+          beginAtZero: true,
+          grid: { drawOnChartArea: false } // avoid double grid clutter
+        }
+      };
+    }
+
+    // Shared chart options: tooltips, legend, interaction mode, etc.
+    function buildOptions(){
+      return {
+        responsive: true,
+        maintainAspectRatio: false, // let CSS control canvas size
+        interaction: { mode: 'index', intersect: false }, // hover shows all series at the same x
+        scales: buildScales(),
+        plugins: {
+          legend: { position: 'top' },
+          tooltip: { mode: 'index', intersect: false }
+        }
+      };
+    }
+
+    // Full Chart.js config object
+    function buildConfig(labels, datasets){
+      return {
+        type: 'line',   // base type; specific datasets can override (e.g., bars)
+        data: { labels, datasets },
+        options: buildOptions()
+      };
+    }
+
+    // Create or update the chart in-place
+    function buildChart(labels, lat, jit, lost, state){
+      const datasets = buildDatasets(labels, lat, jit, lost, state);
+      const cfg = buildConfig(labels, datasets);
+
+      if (chart) {
+        // Update existing chart (cheaper than destroy+recreate)
+        chart.data.labels = labels;
+        chart.data.datasets = datasets;
+        chart.options = cfg.options;
+        chart.update();
+      } else {
+        // First render
+        chart = new Chart($('chart'), cfg);
+      }
+    }
+
+    /* -----------------------------
+       DATA FETCH & REFRESH
+       ----------------------------- */
+
+    // Fetch latest data and re-render the chart
+    async function refresh(){
+      const state = getState();
+      const url = buildUrl(state);
+
+      // Call the backend:
+      // Expected JSON shape:
+      // {
+      //   "rows": [
+      //     { "minute_utc": "2025-09-10T16:45:00Z",
+      //       "latency_avg_ms": 501.0, "jitter_avg_ms": 0.2, "lost": 0 },
+      //     ...
+      //   ]
+      // }
+      const resp = await fetch(url);
+      const js = await resp.json();
+
+      const rows = js.rows || [];                 // tolerate empty results
+      const labels = rows.map(r => r.minute_utc); // x-axis labels (UTC minute strings)
+      const lat    = rows.map(r => r.latency_avg_ms);
+      const jit    = rows.map(r => r.jitter_avg_ms);
+      const lost   = rows.map(r => r.lost);
+
+      buildChart(labels, lat, jit, lost, state);
+    }
+
+    // Wire UI events → refresh chart when toggles change or when user clicks Refresh
+    $('refreshBtn').addEventListener('click', refresh);
+    $('showLatency').addEventListener('change', refresh);
+    $('showJitter').addEventListener('change', refresh);
+    $('showLost').addEventListener('change', refresh);
+
+    // Auto-refresh every 15s to keep the dashboard current
+    setInterval(refresh, 15000);
+
+    // Initial render on page load
+    refresh();
+  </script>
+</body>
+</html>
