@@ -111,36 +111,40 @@ Start Mosquitto broker:
 ```bash
 sudo systemctl start mosquitto
 ```
+## step 4 - SQLite persistence
+   - Agent B inserts aggregates into SQLite with UPSERT.  
+   - Validated rows persisted correctly.
 
+## step 5 - Web Visualization**  
+   - Built Flask endpoint `/api/series`.  
+   - Created Chart.js frontend with toggle controls.  
+   - Added auto-refresh (15s) to keep chart live.
 ###  How to Run
 
-#### Agent B (Echo + MQTT subscriber)
-```bash
-python agent_b.py
-```
-Expected:
-```
-[TCP] Echo server listening on 0.0.0.0:4401
-[MQTT] Connected rc=0; subscribing to 'netstats/+/minute'
-```
+1. Clone repo and set up venv:
+   ```bash
+   git clone https://github.com/MaryamKhalaf2010/Mini-Project
+   cd Mini-Project
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   ```
 
-#### Agent A (Probes + Aggregator + MQTT publisher)
-```bash
-python agent_a.py
-```
-Expected once per minute:
-```json
-{
-  "agent_id": "9815a8dc-136c-460f-9eb6-8fe938d8923b",
-  "time": "2025-09-10T14:07:00Z",
-  "latency_min_ms": 0.122,
-  "latency_max_ms": 0.945,
-  "latency_avg_ms": 0.286,
-  "jitter_min_ms": 0.0,
-  "jitter_max_ms": 0.707,
-  "jitter_avg_ms": 0.113,
-  "sent": 116,
-  "received": 116,
-  "lost": 0
-}
-```
+2. Start local MQTT broker (e.g., `mosquitto` on port 1883).
+
+3. Run Agent B (echo + subscriber + SQLite):
+   ```bash
+   python agent_b.py
+   ```
+
+4. Run Agent A (probe + metrics + publisher):
+   ```bash
+   python agent_a.py
+   ```
+
+5. Run Flask web app:
+   ```bash
+   python app.py
+   ```
+
+6. Open browser at `http://localhost:5000` to view charts.
