@@ -49,9 +49,7 @@
   <!-- Chart.js via CDN (no bundler needed) -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
-    /* -----------------------------
-       GLOBALS & SMALL UTILITIES
-       ----------------------------- */
+   
     let chart;  // holds the Chart.js instance so we can update it in-place
 
     // Fixed colors for each series (latency, jitter, lost)
@@ -64,9 +62,6 @@
     // Shorthand to get element by id
     const $ = id => document.getElementById(id);
 
-    /* -----------------------------
-       STATE & URL BUILDERS
-       ----------------------------- */
 
     // Collect current UI state (checkboxes + any future inputs)
     function getState(){
@@ -88,9 +83,6 @@
       return `/api/series?${params.toString()}`;
     }
 
-    /* -----------------------------
-       CHART CONFIG BUILDERS
-       ----------------------------- */
 
     // Construct the Chart.js datasets based on UI state and fetched arrays
     function buildDatasets(labels, lat, jit, lost, state){
@@ -190,9 +182,7 @@
       }
     }
 
-    /* -----------------------------
-       DATA FETCH & REFRESH
-       ----------------------------- */
+  
 
     // Fetch latest data and re-render the chart
     async function refresh(){
