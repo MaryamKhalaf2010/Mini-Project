@@ -49,19 +49,17 @@
   <!-- Chart.js via CDN (no bundler needed) -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
-   
     let chart;  // holds the Chart.js instance so we can update it in-place
 
     // Fixed colors for each series (latency, jitter, lost)
     const CHART_COLORS = {
       latency: '#3b82f6',                   // blue line
       jitter:  '#a855f7',                   // purple line
-      lost:    'rgba(239, 68, 68, 0.55)'    // semi-transparent red bars
+      lost:    '#ef4444'                    // red line
     };
 
     // Shorthand to get element by id
     const $ = id => document.getElementById(id);
-
 
     // Collect current UI state (checkboxes + any future inputs)
     function getState(){
@@ -83,7 +81,6 @@
       return `/api/series?${params.toString()}`;
     }
 
-
     // Construct the Chart.js datasets based on UI state and fetched arrays
     function buildDatasets(labels, lat, jit, lost, state){
       return [
@@ -97,7 +94,7 @@
           pointRadius: 0,        // hide points for cleaner lines
           hidden: !state.showLatency,
           yAxisID: 'y',          // left axis (milliseconds)
-          order: 1               // render above bars
+          order: 1               // render above others
         },
         {
           label: 'Jitter Avg (ms)',
@@ -112,14 +109,17 @@
           order: 1
         },
         {
-          type: 'bar',           // lost as bars to distinguish from lines
+          /* CHANGED: Lost is now a LINE (not bar) */
           label: 'Lost (count)',
-          data: lost,
-          backgroundColor: CHART_COLORS.lost,
-          borderRadius: 6,       // rounded bar corners
+          data: lost,                  // matches your labels[]
+          borderColor: CHART_COLORS.lost,
+          borderWidth: 2,
+          stepped: true,
+          fill: false,
+          pointRadius: 0,
           hidden: !state.showLost,
-          yAxisID: 'y1',         // right axis (counts)
-          order: 3
+          yAxisID: 'y1',               // right axis for counts
+          order: 1
         }
       ];
     }
@@ -159,7 +159,7 @@
     // Full Chart.js config object
     function buildConfig(labels, datasets){
       return {
-        type: 'line',   // base type; specific datasets can override (e.g., bars)
+        type: 'line',   // base type; all datasets are lines now
         data: { labels, datasets },
         options: buildOptions()
       };
@@ -171,33 +171,20 @@
       const cfg = buildConfig(labels, datasets);
 
       if (chart) {
-        // Update existing chart (cheaper than destroy+recreate)
         chart.data.labels = labels;
         chart.data.datasets = datasets;
         chart.options = cfg.options;
         chart.update();
       } else {
-        // First render
         chart = new Chart($('chart'), cfg);
       }
     }
-
-  
 
     // Fetch latest data and re-render the chart
     async function refresh(){
       const state = getState();
       const url = buildUrl(state);
 
-      // Call the backend:
-      // Expected JSON shape:
-      // {
-      //   "rows": [
-      //     { "minute_utc": "2025-09-10T16:45:00Z",
-      //       "latency_avg_ms": 501.0, "jitter_avg_ms": 0.2, "lost": 0 },
-      //     ...
-      //   ]
-      // }
       const resp = await fetch(url);
       const js = await resp.json();
 
